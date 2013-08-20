@@ -181,7 +181,7 @@ syscall::utimes:return
 /self->start/
 {
     self->start = 0;
-    printf("[%d] %s(\"%S\")\n",
+    printf("[%d] %s(path=\"%S\")\n",
 		  pid,
 		  probefunc,
         copyinstr(self->arg0));
@@ -196,7 +196,7 @@ syscall::open_nocancel:return
 /self->start/
 {
 	 self->start = 0;
-	 printf("[%d] %s(\"%S\", %d) = %d\n",
+	 printf("[%d] %s(path=\"%S\", open=%d) = %d\n",
 		  pid,
 		  probefunc,
 		  copyinstr(self->arg0),
@@ -221,7 +221,7 @@ syscall::write_nocancel:return
 /self->start/
 {
     self->start = 0;
-    printf("[%d] %s(%d)\n",
+    printf("[%d] %s(fd=%d)\n",
 		  pid,
 		  probefunc,
 		  self->arg0);
@@ -236,7 +236,7 @@ syscall::symlink:return
 /self->start/
 {
 	 self->start = 0;
-    printf("[%d] %s(\"%S\", \"%S\")\n",
+    printf("[%d] %s(frompath=\"%S\", topath\"%S\")\n",
 		  pid,
 		  probefunc,
 		  copyinstr(self->arg0),
@@ -252,7 +252,7 @@ syscall::mmap:return
 	 self->start = 0;
 	 /* FIXME(strager): This seems wrong.  The file
 	  * descriptors always appear to be weird numbers. */
-	 printf("[%d] %s(%d)\n",
+	 printf("[%d] %s(fd=%d)\n",
 		  pid,
 		  probefunc,
 		  self->arg4);
