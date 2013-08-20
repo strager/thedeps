@@ -11,7 +11,7 @@ COMMAND="$@"
 
 /usr/sbin/dtrace \
     -x evaltime=exec \
-    -n "$(cat "$HERE/thedeps.d")" \
+    -s "$HERE/thedeps.d" \
     -c "$COMMAND" \
     -o "$LOG_FILE"
 
