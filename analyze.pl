@@ -25,7 +25,7 @@ my $syscall_re = qr/^
     (?<name>[^( ]*)
     (?:\( (?<arguments> (?:${arg_in_list_re})* )\))?
     (?:\ =\ (?<return_value>-?\d+))?
-/x;
+\n$/x;
 
 my %fds = ();
 my %files_touched = ();
@@ -38,6 +38,10 @@ while (<>) {
         my $name = $+{name};
         my $raw_arguments = $+{arguments};
         my $return_value = $+{return_value};
+
+        if (defined($is_unknown)) {
+            printf "Warning: Unknown syscall: $name\n";
+        }
 
         if (defined($raw_arguments)) {
             my %arguments = ();
@@ -72,6 +76,8 @@ while (<>) {
                 }
             }
         }
+    } elsif ($_ ne "\n") {
+        printf "Warning: Failed to parse line: $_\n"
     }
 }
 
