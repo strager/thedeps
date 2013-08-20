@@ -244,18 +244,16 @@ syscall::symlink:return
 }
 
 /*
- * Fifth argument is a file descriptor.
+ * Third argument is a file descriptor.
  */
-syscall::mmap:return
+syscall::mmap:return /* Yes, fd is arg2! */
 /self->start/
 {
 	 self->start = 0;
-	 /* FIXME(strager): This seems wrong.  The file
-	  * descriptors always appear to be weird numbers. */
 	 printf("[%d] %s(fd=%d)\n",
 		  pid,
 		  probefunc,
-		  self->arg4);
+		  self->arg2);
 }
 
 /*
