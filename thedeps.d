@@ -63,428 +63,227 @@
 
 #pragma D option quiet
 
-/*
- * Command line arguments
- */
-inline int OPT_command   = 1;
-inline int OPT_follow    = 1;
-inline int OPT_printid   = 1;
-inline int OPT_trace     = 0;
-inline string TRACE      = "";
-
 dtrace:::BEGIN 
 {
-   /* globals */
-   trackedpid[pid] = 0;
-   self->child = 0;
-   this->type = 0;
+    /* globals */
+    trackedpid[pid] = 0;
+    self->child = 0;
+    this->type = 0;
 }
 
 /*
- * Save syscall entry info
+ * MacOS X: notice first appearance of child from fork. Its
+ * parent fires syscall::*fork:return in the ususal way (see
+ * below).
  */
-
-/* MacOS X: notice first appearance of child from fork. Its parent
-   fires syscall::*fork:return in the ususal way (see below) */
 syscall:::entry
-/OPT_follow && trackedpid[ppid] == -1 && 0 == self->child/
+/trackedpid[ppid] == -1 && 0 == self->child/
 {
-   /* set as child */
-   self->child = 1;
-
-   /* print output */
-   self->code = errno == 0 ? "" : "Err#";
-   /* OPT_printid  ? printf("%5d/%d:  ",pid,tid) : 1; */
-   OPT_printid  ? printf("%5d/0x%x:  ",pid,tid) : 1;
-   printf("%s()\t\t = %d %s%d\n","fork",
-       0,self->code,(int)errno);
+    self->child = 1;
 }
 
-/* MacOS X: notice first appearance of child and parent from vfork */
+/*
+ * MacOS X: notice first appearance of child and parent from
+ * vfork
+ */
 syscall:::entry
-/OPT_follow && trackedpid[ppid] > 0 && 0 == self->child/
+/trackedpid[ppid] > 0 && 0 == self->child/
 {
-   /* set as child */
-   this->vforking_tid = trackedpid[ppid];
-   self->child = (this->vforking_tid == tid) ? 0 : 1;
-
-   /* print output */
-   self->code = errno == 0 ? "" : "Err#";
-   /* OPT_printid  ? printf("%5d/%d:  ",pid,tid) : 1; */
-   OPT_printid  ? printf("%5d/0x%x:  ",(this->vforking_tid == tid) ? ppid : pid,tid) : 1;
-   printf("%s()\t\t = %d %s%d\n","vfork",
-       (this->vforking_tid == tid) ? pid : 0,self->code,(int)errno);
+    this->vforking_tid = trackedpid[ppid];
+    self->child = (this->vforking_tid == tid) ? 0 : 1;
 }
 
 syscall:::entry
-/(OPT_command && pid == $target) || 
- (self->child)/
+/pid == $target || self->child/
 {
-   /* set start details */
-   self->start = timestamp;
-   self->vstart = vtimestamp;
-   self->arg0 = arg0;
-   self->arg1 = arg1;
-   self->arg2 = arg2;
+    self->start = 1;
+    self->arg0 = arg0;
+    self->arg1 = arg1;
+    self->arg2 = arg2;
 }
 
-/* 5 and 6 arguments */
 syscall::select:entry,
 syscall::mmap:entry,
 syscall::pwrite:entry,
 syscall::pread:entry
-/(OPT_command && pid == $target) || 
- (self->child)/
+/pid == $target || self->child/
 {
-   self->arg3 = arg3;
-   self->arg4 = arg4;
-   self->arg5 = arg5;
+    self->arg3 = arg3;
+    self->arg4 = arg4;
+    self->arg5 = arg5;
 }
 
 /*
- * Follow children
+ * Follow forked children.
  */
 syscall::fork:entry
-/OPT_follow && self->start/
-{
-   /* track this parent process */
-   trackedpid[pid] = -1;
-}
-
-syscall::vfork:entry
-/OPT_follow && self->start/
-{
-   /* track this parent process */
-   trackedpid[pid] = tid;
-}
-
-/* syscall::rexit:entry */
-syscall::exit:entry
-{
-   /* forget child */
-   self->child = 0;
-   trackedpid[pid] = 0;
-}
-
-/*
- * Check for syscall tracing
- */
-syscall:::entry
-/OPT_trace && probefunc != TRACE/
-{
-   /* drop info */
-   self->start = 0;
-   self->vstart = 0;
-   self->arg0 = 0;
-   self->arg1 = 0;
-   self->arg2 = 0;
-   self->arg3 = 0;
-   self->arg4 = 0;
-   self->arg5 = 0;
-}
-
-/*
- * Print return data
- */
-
-/*
- * NOTE:
- *  The following code is written in an intentionally repetetive way.
- *  The first versions had no code redundancies, but performed badly during
- *  benchmarking. The priority here is speed, not cleverness. I know there
- *  are many obvious shortcuts to this code, Ive tried them. This style has
- *  shown in benchmarks to be the fastest (fewest probes, fewest actions).
- */
-
-/* print 3 args, return as hex */
-syscall::sigprocmask:return
 /self->start/
 {
-   /* calculate elapsed time */
-   this->elapsed = timestamp - self->start;
-   self->start = 0;
-   this->cpu = vtimestamp - self->vstart;
-   self->vstart = 0;
-   self->code = errno == 0 ? "" : "Err#";
-
-   /* print optional fields */
-   /* OPT_printid  ? printf("%5d/%d:  ",pid,tid) : 1; */
-   OPT_printid  ? printf("%5d/0x%x:  ",pid,tid) : 1;
-
-   /* print main data */
-   printf("%s(0x%X, 0x%X, 0x%X)\t\t = 0x%X %s%d\n",probefunc,
-       (int)self->arg0,self->arg1,self->arg2,(int)arg0,
-       self->code,(int)errno);
-   self->arg0 = 0;
-   self->arg1 = 0;
-   self->arg2 = 0;
+    /* Track this parent process. */
+    trackedpid[pid] = -1;
 }
 
-/* print 3 args, arg0 as a string */
-syscall::execve:return,
-syscall::stat:return, 
-syscall::stat64:return, 
-syscall::lstat:return, 
-syscall::lstat64:return, 
+/*
+ * Follow vforked children.
+ */
+syscall::vfork:entry
+/self->start/
+{
+    /* Track this parent process. */
+    trackedpid[pid] = tid;
+}
+
+/*syscall::rexit:entry*/
+syscall::exit:entry
+{
+    self->child = 0;
+    trackedpid[pid] = 0;
+}
+
+/*
+ * No important arguments, return value is important.
+ */
+syscall::getegid:return,
+syscall::geteuid:return,
+syscall::issetugid:return
+/self->start/
+{
+	 self->start = 0;
+	 printf("[%d] %s() = %d\n",
+		  pid,
+		  probefunc,
+		  (int)arg0);
+}
+
+/*
+ * First argument is a file path.
+ */
 syscall::access:return,
-syscall::mkdir:return,
 syscall::chdir:return,
-syscall::chroot:return,
-syscall::getattrlist:return, /* XXX 5 arguments */
-syscall::chown:return,
-syscall::lchown:return,
 syscall::chflags:return,
-syscall::readlink:return,
-syscall::utimes:return,
-syscall::pathconf:return,
-syscall::truncate:return,
+syscall::chown:return,
+syscall::chroot:return,
+syscall::execve:return,
+syscall::getattrlist:return,
 syscall::getxattr:return,
-syscall::setxattr:return,
+syscall::lchown:return,
+syscall::lstat64:return, 
+syscall::lstat:return, 
+syscall::mkdir:return,
+syscall::readlink:return,
 syscall::removexattr:return,
+syscall::setxattr:return,
+syscall::stat64:return, 
+syscall::stat:return, 
+syscall::truncate:return,
 syscall::unlink:return,
+syscall::utimes:return
+/self->start/
+{
+    self->start = 0;
+    printf("[%d] %s(\"%S\")\n",
+		  pid,
+		  probefunc,
+        copyinstr(self->arg0));
+}
+
+/*
+ * First argument is a file descriptor.  Second argument is
+ * an open(2) mode.  Return value is important.
+ */
 syscall::open:return,
 syscall::open_nocancel:return
 /self->start/
 {
-   /* calculate elapsed time */
-   this->elapsed = timestamp - self->start;
-   self->start = 0;
-   this->cpu = vtimestamp - self->vstart;
-   self->vstart = 0;
-   self->code = errno == 0 ? "" : "Err#";
-
-   /* print optional fields */
-   /* OPT_printid  ? printf("%5d/%d:  ",pid,tid) : 1; */
-   OPT_printid  ? printf("%5d/0x%x:  ",pid,tid) : 1;
-
-   /* print main data */
-   printf("%s(\"%S\", 0x%X, 0x%X)\t\t = %d %s%d\n",probefunc,
-       copyinstr(self->arg0),self->arg1,self->arg2,(int)arg0,
-       self->code,(int)errno);
-   self->arg0 = 0;
-   self->arg1 = 0;
-   self->arg2 = 0;
+	 self->start = 0;
+	 printf("[%d] %s(\"%S\", %d) = %d\n",
+		  pid,
+		  probefunc,
+		  copyinstr(self->arg0),
+		  self->arg1,
+		  (int)arg0);
 }
 
-/* print 3 args, arg1 as a string */
-syscall::write:return,
-syscall::write_nocancel:return,
-syscall::read:return,
-syscall::read_nocancel:return
-/self->start/
-{
-   /* calculate elapsed time */
-   this->elapsed = timestamp - self->start;
-   self->start = 0;
-   this->cpu = vtimestamp - self->vstart;
-   self->vstart = 0;
-   self->code = errno == 0 ? "" : "Err#";
-
-   /* print optional fields */
-   /* OPT_printid  ? printf("%5d/%d:  ",pid,tid) : 1; */
-   OPT_printid  ? printf("%5d/0x%x:  ",pid,tid) : 1;
-
-   /* print main data */
-   printf("%s(0x%X, \"%S\", 0x%X)\t\t = %d %s%d\n",probefunc,self->arg0,
-       arg0 == -1 ? "" : stringof(copyin(self->arg1,arg0)),self->arg2,(int)arg0,
-       self->code,(int)errno);
-   self->arg0 = 0;
-   self->arg1 = 0;
-   self->arg2 = 0;
-}
-
-/* print 2 args, arg0 and arg1 as strings */
-syscall::rename:return,
-syscall::symlink:return,
-syscall::link:return
-/self->start/
-{
-   /* calculate elapsed time */
-   this->elapsed = timestamp - self->start;
-   self->start = 0;
-   this->cpu = vtimestamp - self->vstart;
-   self->vstart = 0;
-   self->code = errno == 0 ? "" : "Err#";
-
-   /* print optional fields */
-   /* OPT_printid  ? printf("%5d/%d:  ",pid,tid) : 1; */
-   OPT_printid  ? printf("%5d/0x%x:  ",pid,tid) : 1;
-
-   /* print main data */
-   printf("%s(\"%S\", \"%S\")\t\t = %d %s%d\n",probefunc,
-       copyinstr(self->arg0), copyinstr(self->arg1),
-       (int)arg0,self->code,(int)errno);
-   self->arg0 = 0;
-   self->arg1 = 0;
-   self->arg2 = 0;
-}
-
-/* print 0 arg output */
-syscall::*fork:return
-/self->start/
-{
-   /* calculate elapsed time */
-   this->elapsed = timestamp - self->start;
-   self->start = 0;
-   this->cpu = vtimestamp - self->vstart;
-   self->vstart = 0;
-   self->code = errno == 0 ? "" : "Err#";
-
-   /* print optional fields */
-   /* OPT_printid  ? printf("%5d/%d:  ",pid,tid) : 1; */
-   OPT_printid  ? printf("%5d/0x%x:  ",pid,tid) : 1;
-
-   /* print main data */
-   printf("%s()\t\t = %d %s%d\n",probefunc,
-       (int)arg0,self->code,(int)errno);
-   self->arg0 = 0;
-   self->arg1 = 0;
-   self->arg2 = 0;
-}
-
-/* print 1 arg output */
+/*
+ * First argument is a file descriptor.
+ */
 syscall::close:return,
-syscall::close_nocancel:return
-/self->start/
-{
-   /* calculate elapsed time */
-   this->elapsed = timestamp - self->start;
-   self->start = 0;
-   this->cpu = vtimestamp - self->vstart;
-   self->vstart = 0;
-   self->code = errno == 0 ? "" : "Err#";
-
-   /* print optional fields */
-   /* OPT_printid  ? printf("%5d/%d:  ",pid,tid) : 1; */
-   OPT_printid  ? printf("%5d/0x%x:  ",pid,tid) : 1;
-
-   /* print main data */
-   printf("%s(0x%X)\t\t = %d %s%d\n",probefunc,self->arg0,
-       (int)arg0,self->code,(int)errno);
-   self->arg0 = 0;
-   self->arg1 = 0;
-   self->arg2 = 0;
-}
-
-/* print 2 arg output */
-syscall::utimes:return,
-syscall::munmap:return
-/self->start/
-{
-   /* calculate elapsed time */
-   this->elapsed = timestamp - self->start;
-   self->start = 0;
-   this->cpu = vtimestamp - self->vstart;
-   self->vstart = 0;
-   self->code = errno == 0 ? "" : "Err#";
-
-   /* print optional fields */
-   /* OPT_printid  ? printf("%5d/%d:  ",pid,tid) : 1; */
-   OPT_printid  ? printf("%5d/0x%x:  ",pid,tid) : 1;
-
-   /* print main data */
-   printf("%s(0x%X, 0x%X)\t\t = %d %s%d\n",probefunc,self->arg0,
-       self->arg1,(int)arg0,self->code,(int)errno);
-   self->arg0 = 0;
-   self->arg1 = 0;
-   self->arg2 = 0;
-}
-
-/* print pread/pwrite with 4 arguments */
+syscall::close_nocancel:return,
+syscall::fstat64:return,
+syscall::fstat:return,
+syscall::futimes:return,
 syscall::pread*:return,
-syscall::pwrite*:return
+syscall::pwrite*:return,
+syscall::read:return,
+syscall::read_nocancel:return,
+syscall::write:return,
+syscall::write_nocancel:return
 /self->start/
 {
-   /* calculate elapsed time */
-   this->elapsed = timestamp - self->start;
-   self->start = 0;
-   this->cpu = vtimestamp - self->vstart;
-   self->vstart = 0;
-   self->code = errno == 0 ? "" : "Err#";
-
-   /* print optional fields */
-   /* OPT_printid  ? printf("%5d/%d:  ",pid,tid) : 1; */
-   OPT_printid  ? printf("%5d/0x%x:  ",pid,tid) : 1;
-
-   /* print main data */
-   printf("%s(0x%X, \"%S\", 0x%X, 0x%X)\t\t = %d %s%d\n",probefunc,self->arg0,
-       stringof(copyin(self->arg1,self->arg2)),self->arg2,self->arg3,(int)arg0,self->code,(int)errno);
-   self->arg0 = 0;
-   self->arg1 = 0;
-   self->arg2 = 0;
-   self->arg3 = 0;
+    self->start = 0;
+    printf("[%d] %s(%d)\n",
+		  pid,
+		  probefunc,
+		  self->arg0);
 }
 
-/* print select with 5 arguments */
-syscall::select:return
+/*
+ * First and second arguments are file paths.
+ */
+syscall::link:return,
+syscall::rename:return,
+syscall::symlink:return
 /self->start/
 {
-   /* calculate elapsed time */
-   this->elapsed = timestamp - self->start;
-   self->start = 0;
-   this->cpu = vtimestamp - self->vstart;
-   self->vstart = 0;
-   self->code = errno == 0 ? "" : "Err#";
-
-   /* print optional fields */
-   /* OPT_printid  ? printf("%5d/%d:  ",pid,tid) : 1; */
-   OPT_printid  ? printf("%5d/0x%x:  ",pid,tid) : 1;
-
-   /* print main data */
-   printf("%s(0x%X, 0x%X, 0x%X, 0x%X, 0x%X)\t\t = %d %s%d\n",probefunc,self->arg0,
-       self->arg1,self->arg2,self->arg3,self->arg4,(int)arg0,self->code,(int)errno);
-   self->arg0 = 0;
-   self->arg1 = 0;
-   self->arg2 = 0;
-   self->arg3 = 0;
-   self->arg4 = 0;
+	 self->start = 0;
+    printf("[%d] %s(\"%S\", \"%S\")\n",
+		  pid,
+		  probefunc,
+		  copyinstr(self->arg0),
+		  copyinstr(self->arg1));
 }
 
-/* mmap has 6 arguments */
+/*
+ * Fifth argument is a file descriptor.
+ */
 syscall::mmap:return
 /self->start/
 {
-   /* calculate elapsed time */
-   this->elapsed = timestamp - self->start;
-   self->start = 0;
-   this->cpu = vtimestamp - self->vstart;
-   self->vstart = 0;
-   self->code = errno == 0 ? "" : "Err#";
-
-   /* print optional fields */
-   /* OPT_printid  ? printf("%5d/%d:  ",pid,tid) : 1; */
-   OPT_printid  ? printf("%5d/0x%x:  ",pid,tid) : 1;
-
-   /* print main data */
-   printf("%s(0x%X, 0x%X, 0x%X, 0x%X, 0x%X, 0x%X)\t\t = 0x%X %s%d\n",probefunc,self->arg0,
-       self->arg1,self->arg2,self->arg3,self->arg4,self->arg5, (int)arg0,self->code,(int)errno);
-   self->arg0 = 0;
-   self->arg1 = 0;
-   self->arg2 = 0;
-   self->arg3 = 0;
-   self->arg4 = 0;
-   self->arg5 = 0;
+	 self->start = 0;
+	 /* FIXME(strager): This seems wrong.  The file
+	  * descriptors always appear to be weird numbers. */
+	 printf("[%d] %s(%d)\n",
+		  pid,
+		  probefunc,
+		  self->arg4);
 }
 
-/* print 3 arg output - default */
+/*
+ * Boring syscalls.
+ */
+syscall::getpid:return,
+syscall::mprotect:return,
+syscall::munmap:return,
+syscall::setegid:return,
+syscall::seteuid:return,
+syscall::setgid:return,
+syscall::setuid:return,
+syscall::sigprocmask:return,
+syscall::thread_selfid:return
+/self->start/
+{
+	 self->start = 0;
+}
+
+/*
+ * Catch-all, printing a warning because we haven't handled
+ * this syscall yet.
+ */
 syscall:::return
 /self->start/
 {
-   /* calculate elapsed time */
-   this->elapsed = timestamp - self->start;
-   self->start = 0;
-   this->cpu = vtimestamp - self->vstart;
-   self->vstart = 0;
-   self->code = errno == 0 ? "" : "Err#";
-
-   /* print optional fields */
-   /* OPT_printid  ? printf("%5d/%d:  ",pid,tid) : 1; */
-   OPT_printid  ? printf("%5d/0x%x:  ",pid,tid) : 1;
-
-   /* print main data */
-   printf("%s(0x%X, 0x%X, 0x%X)\t\t = %d %s%d\n",probefunc,self->arg0,
-       self->arg1,self->arg2,(int)arg0,self->code,(int)errno);
-   self->arg0 = 0;
-   self->arg1 = 0;
-   self->arg2 = 0;
+	 self->start = 0;
+	 printf("[%d] ?%s\n",
+		  pid,
+		  probefunc);
 }
