@@ -2,14 +2,13 @@
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-#LOG_FILE="$(mktemp -t "thedeps.$$")"
-LOG_FILE=/dev/stderr
+LOG_FILE="$(mktemp -t "thedeps.$$")"
 
 # FIXME(strager): Escaping isn't quite right here.  Might be
 # a dtrace issue.
 COMMAND="$@"
 
-/usr/sbin/dtrace \
+sudo /usr/sbin/dtrace \
     -x evaltime=exec \
     -s "$HERE/thedeps.d" \
     -c "$COMMAND" \
