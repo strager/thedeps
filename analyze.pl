@@ -43,13 +43,13 @@ my $string_escape_re = qr/
     )
 /x;
 
-sub parse_value {
+sub parse_value ($) {
     my $v = shift;
-    if ($v =~ /$string_body_re/) {
+    if ($v =~ $string_body_re) {
         ($v = $1) =~ s/$string_escape_re/
-            if (defined($1)) {
+            if (defined $1) {
                 chr oct $1;
-            } elsif (defined($2)) {
+            } elsif (defined $2) {
                 $2;
             } else {
                 die "Broken \$string_escape_re regex";
@@ -59,11 +59,9 @@ sub parse_value {
     return $v;
 }
 
-sub parse_syscall {
+sub parse_syscall ($) {
     $_ = shift;
-    if (!/$syscall_re/) {
-        return undef;
-    }
+    return undef unless /$syscall_re/;
 
     my $is_unknown = $+{is_unknown};
     my $name = $+{name};
@@ -72,7 +70,7 @@ sub parse_syscall {
     my $return_value = $+{return_value};
 
     my %arguments = ();
-    if (defined($raw_arguments)) {
+    if (defined $raw_arguments) {
         while ($raw_arguments =~ /${arg_in_list_re}/xg) {
             $arguments{$1} = parse_value($2);
         }
@@ -80,7 +78,7 @@ sub parse_syscall {
 
     return {
         arguments => \%arguments,
-        is_unknown => defined($is_unknown),
+        is_unknown => defined $is_unknown,
         name => $name,
         pid => $pid,
         return_value => $return_value
@@ -93,40 +91,35 @@ my %files_touched = ();
 while (<>) {
     my $syscall_ref = parse_syscall($_);
     if (!$syscall_ref) {
-        if ($_ ne "\n") {
-            warn "Failed to parse line: $_";
-        }
+        warn "Failed to parse line: $_" unless $_ eq "\n";
         next;
     }
 
     my %syscall = %{$syscall_ref};
-
-    if ($syscall{is_unknown}) {
-        warn "Unknown syscall: $syscall{name}";
-    }
-
     my %args = %{$syscall{arguments}};
 
-    if (defined($args{fd}) and defined($args{path})) {
+    warn "Unknown syscall: $syscall{name}" if $syscall{is_unknown};
+
+    if (exists $args{fd} and exists $args{path}) {
         $fds{$args{fd}} = $args{path};
-    } elsif (defined($args{open}) and defined($args{path})) {
+    } elsif (exists $args{open} and exists $args{path}) {
         $fds{$syscall{return_value}} = $args{path};
     }
 
-    if (defined($args{path})) {
+    if (exists $args{path}) {
         $files_touched{$args{path}} = 1;
     }
-    if (defined($args{frompath})) {
+    if (exists $args{frompath}) {
         $files_touched{$args{frompath}} = 1;
     }
-    if (defined($args{topath})) {
+    if (exists $args{topath}) {
         $files_touched{$args{topath}} = 1;
     }
-    if (defined($args{fd})) {
+    if (exists $args{fd}) {
         my $fd = $args{fd};
         if ($fd == 0 or $fd == 1 or $fd == 2) {
             # stdin, stdout, stderr
-        } elsif (defined($fds{$fd})) {
+        } elsif (exists $fds{$fd}) {
             $files_touched{$fds{$fd}} = 1;
         } else {
             warn "No file path known for file descriptor $fd";
