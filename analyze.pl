@@ -3,6 +3,13 @@
 use strict;
 use warnings;
 
+# Prefix all warnings with "Warning: ".
+BEGIN {
+    $SIG{'__WARN__'} = sub {
+        warn "Warning: ", $_[0];
+    }
+}
+
 # key=value, where value is a number or string.
 # Puts key in first capture group; value in second.
 my $arg_re = qr/
@@ -27,62 +34,109 @@ my $syscall_re = qr/^
     (?:\ =\ (?<return_value>-?\d+))?
 \n$/x;
 
+my $string_body_re = qr/^"(.*)\\0"$/;
+
+my $string_escape_re = qr/
+    \\ (?:
+        ([0-3][0-7]{2}) # Three octal digits.
+        | ([^0-9])      # Non-digit literal character.
+    )
+/x;
+
+sub parse_value {
+    my $v = shift;
+    if ($v =~ /$string_body_re/) {
+        ($v = $1) =~ s/$string_escape_re/
+            if (defined($1)) {
+                chr oct $1;
+            } elsif (defined($2)) {
+                $2;
+            } else {
+                die "Broken \$string_escape_re regex";
+            }
+        /eg;
+    }
+    return $v;
+}
+
+sub parse_syscall {
+    $_ = shift;
+    if (!/$syscall_re/) {
+        return undef;
+    }
+
+    my $is_unknown = $+{is_unknown};
+    my $name = $+{name};
+    my $pid = $+{pid};
+    my $raw_arguments = $+{arguments};
+    my $return_value = $+{return_value};
+
+    my %arguments = ();
+    if (defined($raw_arguments)) {
+        while ($raw_arguments =~ /${arg_in_list_re}/xg) {
+            $arguments{$1} = parse_value($2);
+        }
+    }
+
+    return {
+        arguments => \%arguments,
+        is_unknown => defined($is_unknown),
+        name => $name,
+        pid => $pid,
+        return_value => $return_value
+    };
+}
+
 my %fds = ();
 my %files_touched = ();
 
 while (<>) {
-    # Parse syscall lines.
-    if ($_ =~ $syscall_re) {
-        my $pid = $+{pid};
-        my $is_unknown = $+{is_unknown};
-        my $name = $+{name};
-        my $raw_arguments = $+{arguments};
-        my $return_value = $+{return_value};
-
-        if (defined($is_unknown)) {
-            printf "Warning: Unknown syscall: $name\n";
+    my $syscall_ref = parse_syscall($_);
+    if (!$syscall_ref) {
+        if ($_ ne "\n") {
+            warn "Failed to parse line: $_";
         }
+        next;
+    }
 
-        if (defined($raw_arguments)) {
-            my %arguments = ();
-            while ($raw_arguments =~ /${arg_in_list_re}/xg) {
-                # TODO Unescape strings and all that.
-                $arguments{$1} = $2;
-            }
+    my %syscall = %{$syscall_ref};
 
-            if (defined($arguments{fd}) and defined($arguments{path})) {
-                $fds{$arguments{fd}} = $arguments{path};
-            } elsif (defined($arguments{open}) and defined($arguments{path})) {
-                $fds{$return_value} = $arguments{path};
-            }
+    if ($syscall{is_unknown}) {
+        warn "Unknown syscall: $syscall{name}";
+    }
 
-            if (defined($arguments{path})) {
-                $files_touched{$arguments{path}} = 1;
-            }
-            if (defined($arguments{frompath})) {
-                $files_touched{$arguments{frompath}} = 1;
-            }
-            if (defined($arguments{topath})) {
-                $files_touched{$arguments{topath}} = 1;
-            }
-            if (defined($arguments{fd})) {
-                my $fd = $arguments{fd};
-                if ($fd == 0 or $fd == 1 or $fd == 2) {
-                    # stdin, stdout, stderr
-                } elsif (defined($fds{$fd})) {
-                    $files_touched{$fds{$fd}} = 1;
-                } else {
-                    print "Warning: No file path known for file descriptor $fd\n";
-                }
-            }
+    my %args = %{$syscall{arguments}};
+
+    if (defined($args{fd}) and defined($args{path})) {
+        $fds{$args{fd}} = $args{path};
+    } elsif (defined($args{open}) and defined($args{path})) {
+        $fds{$syscall{return_value}} = $args{path};
+    }
+
+    if (defined($args{path})) {
+        $files_touched{$args{path}} = 1;
+    }
+    if (defined($args{frompath})) {
+        $files_touched{$args{frompath}} = 1;
+    }
+    if (defined($args{topath})) {
+        $files_touched{$args{topath}} = 1;
+    }
+    if (defined($args{fd})) {
+        my $fd = $args{fd};
+        if ($fd == 0 or $fd == 1 or $fd == 2) {
+            # stdin, stdout, stderr
+        } elsif (defined($fds{$fd})) {
+            $files_touched{$fds{$fd}} = 1;
+        } else {
+            warn "No file path known for file descriptor $fd";
         }
-    } elsif ($_ ne "\n") {
-        printf "Warning: Failed to parse line: $_\n"
     }
 }
 
 my $num_files_touched = keys %files_touched;
-print "Touched $num_files_touched file(s):\n";
-for (keys %files_touched) {
-    print " - $_\n";
+print "Touched $num_files_touched files:\n";
+for (sort keys %files_touched) {
+    my $v = parse_value($_);
+    print " - $v\n";
 }
